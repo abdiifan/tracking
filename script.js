@@ -1,3 +1,25 @@
+// =============================================================================
+// PharmaTrack v2 — Pharmaceutical Inventory Management System
+// =============================================================================
+// Fixes applied vs v8:
+//  BUG-1  Preview download now exports full filtered dataset (not 500-row slice)
+//  BUG-2  Chain/circular reconciliation rules detected and blocked on save
+//  BUG-3  pageFilters reset on new file upload so stale plant/MG never persists
+//  BUG-4  "Already Expired" KPI now counts only stock-qty > 0 rows (matches table)
+//  BUG-5  Target materials blocked from being selected as a new source
+//  BUG-6  QC page no longer drops items with QC qty > 0 but zero ETB value
+//  BUG-7  rpSetSelected chip close button uses addEventListener, not inline onclick
+//  BUG-8  String expiry dates parsed as LOCAL midnight not UTC (timezone fix)
+//  BUG-9  CSV tab-character cells now quoted correctly
+//  BUG-10 groupBy empty-string bucket renamed to "(Blank)" for chart clarity
+//  PERF-1 applyReconciliationToData result memoised; invalidated on file/rule change
+//  PERF-2 File size warning before parse (>25 MB)
+//  ROBUST localStorage schema validated on load; corrupt entries discarded
+//  ROBUST Column header matching is now case-insensitive
+//  ROBUST Total Qty removed from QTY_COLS scaling (was scaled then overwritten)
+//  ROBUST Conversion factor stored with 9dp rounding to suppress float drift
+// =============================================================================
+
 // ── CONSTANTS ──────────────────────────────────────────────────────────────
 const REQUIRED_COLUMNS = [
   "Material","Material Description","Plant","Plant Name",
@@ -861,14 +883,11 @@ function getTransitInfo(material, plantCode) {
 // Holds the full transit rows (pre-built) so the search filter can re-slice them.
 let _transitRowsCache = [];
 let _transitColsCache = [];
-let _ho01RowsCache    = [];
 
 function renderTransit() {
-  // [ALL EXCLUSIONS DISABLED] — show all transit rows regardless of material type
-  const df = applyPageFilter("transit").filter(r =>
-    r["Stock in Transit"] > 0 &&
-    r["Value of Stock in Transit"] > 0
-  );
+  // Show all transit rows with physical qty > 0, including non-valuated items
+  // (removed Value > 0 condition — same fix as BUG-6 applied for QC page)
+  const df = applyPageFilter("transit").filter(r => r["Stock in Transit"] > 0);
 
   const totalTV = df.reduce((s,r) => s + r["Value of Stock in Transit"], 0);
   const totalTQ = df.reduce((s,r) => s + r["Stock in Transit"], 0);
@@ -972,7 +991,8 @@ function renderExpiry() {
   const cutoff  = new Date(today); cutoff.setMonth(cutoff.getMonth() + months);
   const valid   = baseDf.filter(r => r._expiry instanceof Date && !isNaN(r._expiry));
 
-  const expiring     = valid.filter(r => r._expiry >= today && r._expiry <= cutoff && (r["Unrestricted Stock"]||0) > 0 && (r["Value of Unrestricted Stock"]||0) > 0);
+  // Include non-valuated items (qty > 0 but zero ETB) — same fix as BUG-6 for QC
+  const expiring     = valid.filter(r => r._expiry >= today && r._expiry <= cutoff && (r["Unrestricted Stock"]||0) > 0);
   const expired      = valid.filter(r => r._expiry < today);
   // FIX BUG-4: filter zero-qty BEFORE the KPI count so KPI matches the table
   const expiredWithStock = expired.filter(r => (r["Unrestricted Stock"] || 0) > 0);
@@ -1096,7 +1116,7 @@ function renderExpirySearch() {
   const matches = baseDf.filter(r => {
     const code     = String(r["Material"] || "").toLowerCase();
     const desc     = String(r["Material Description"] || "").toLowerCase();
-    const hasStock = (r["Unrestricted Stock"] || 0) > 0 && (r["Value of Unrestricted Stock"] || 0) > 0;
+    const hasStock = (r["Unrestricted Stock"] || 0) > 0;
     return hasStock && (code.includes(query) || desc.includes(query));
   });
 
@@ -1379,9 +1399,8 @@ function renderBranch() {
   // first row's Plant/Plant Name as the base, so df.find("HO01") can miss HO01
   // entirely if another plant's row happened to be first for that material.
   const plantsRaw = [...new Set(baseDf.map(r => String(r["Plant"]).toUpperCase()))];
-  let centralCode, centralName;
+  let centralName;
   if (plantsRaw.includes("HO01")) {
-    centralCode = "HO01";
     centralName = baseDf.find(r => String(r["Plant"]).toUpperCase() === "HO01")?.["Plant Name"] || "HO01";
     document.getElementById("branch-central-info").style.display = "none";
   } else {
@@ -1658,7 +1677,8 @@ function renderBranch() {
     }
   }
 
-  sel.addEventListener("change", updateBranchCharts);
+  // Use onchange (not addEventListener) so re-renders don't stack duplicate listeners
+  sel.onchange = updateBranchCharts;
   updateBranchCharts();
 }
 
@@ -1785,7 +1805,9 @@ function renderPreview() {
 function populatePreviewFilters() {
   function fill(id, key, excludeFn) {
     const sel = document.getElementById(id); if (!sel) return;
-    const vals = [...new Set(rawDf.map(r => r[key]))]
+    // BUG-FIX: use getReconciledBase() not rawDf so reconciled material codes
+    // and their plant names match what actually appears in the preview table.
+    const vals = [...new Set(getReconciledBase().map(r => r[key]))]
       .filter(Boolean)
       .filter(v => !excludeFn || !excludeFn(v))
       .sort();
@@ -1985,8 +2007,9 @@ function aggregateByMaterial(df) {
     "Total Qty",
   ];
   const VAL_COLS = [
-    "Value of Unrestricted Stock", "Value of Stock in Quality Inspection",
-    "Value of Stock in Transit",   "Value of Stock in Quality Inspection",
+    "Value of Unrestricted Stock",
+    "Value of Stock in Quality Inspection",
+    "Value of Stock in Transit",
     "Total Value",
   ];
 
@@ -2184,7 +2207,7 @@ function handleReconcileFileUpload(file) {
   const reader = new FileReader();
   reader.onload = e => {
     try {
-      const wb   = XLSX.read(e.target.result, {type:"array"});
+      const wb   = XLSX.read(new Uint8Array(e.target.result), {type:"array"});
       const ws   = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
       let added = 0, skipped = 0, errors = [];
@@ -2192,11 +2215,11 @@ function handleReconcileFileUpload(file) {
         const r       = rows[i];
         const srcMat  = String(r[0] || "").trim();
         const srcDesc = String(r[1] || "").trim();
-        const factor  = parseFloat(r[2]);
-        const tgtMat  = String(r[3] || "").trim();
-        const tgtDesc = String(r[4] || "").trim();
-        const srcUnit = "";
-        const tgtUnit = "";
+        const srcUnit = String(r[2] || "").trim();  // col C = Unit (source)
+        const factor  = parseFloat(r[3]);            // col D = Conversion Factor
+        const tgtMat  = String(r[4] || "").trim();  // col E = Material (target)
+        const tgtDesc = String(r[5] || "").trim();  // col F = Material Description (target)
+        const tgtUnit = String(r[6] || "").trim();  // col G = Unit (target)
 
         if (!srcMat || !tgtMat || isNaN(factor) || factor <= 0) { skipped++; continue; }
 
