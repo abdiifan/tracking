@@ -34,9 +34,13 @@ const REQUIRED_COLUMNS = [
 
 const COLORWAY = ["#58a6ff","#3fb950","#d29922","#f85149","#a371f7","#79c0ff","#56d364","#e3b341","#ff7b72","#d2a8ff","#ffa657","#70d9a0"];
 
-// ── FILTER STUBS (formerly filters.js — integrated, all exclusions disabled) ──
-// Every function returns the "keep this row" value so 100 % of raw Excel data
-// passes through. Original logic is preserved in comments for easy restoration.
+// ── FILTER STUBS (formerly filters.js — integrated) ──────────────────────────
+// EXCLUSIONS RE-ENABLED (2025-06):
+//   • Special Stock Type "Q" and "W" are hard-excluded at load time.
+//   • 21 storage locations are hard-excluded at load time.
+// Other stubs (material code prefix, non-medical group, project stock
+// description) remain disabled — they return false so 100 % of those rows
+// still pass through.
 
 function isNonMedicalCode(code) {   // was: true for NT* prefix / non-[1-4] codes
   return false;
@@ -50,8 +54,22 @@ function isNonMedicalGroup(groupName) { // was: true for NON TRADE, PROJECT STOC
 function isProjectStockDescription(description) { // was: true if description === "PROJECT STOCK"
   return false;
 }
-function isExcludedStorageLocation(storageLoc) { // was: true for 21 hard-coded location codes
-  return false;
+
+// EXCLUSIONS RE-ENABLED — returns true when the Special Stock Type should be
+// excluded. "Q" = Project Stock (type Q), "W" = Vendor Consignment.
+function isExcludedSpecialStockType(sst) {
+  const s = String(sst || "").trim().toUpperCase();
+  return s === "Q" || s === "W";
+}
+
+// EXCLUSIONS RE-ENABLED — returns true when the Storage Location is in the
+// hard-coded exclusion list (21 locations, all confirmed non-dispensing).
+const EXCLUDED_STORAGE_LOCATIONS = new Set([
+  "ADG1","ARG1","ASG1","BDG1","DDG1","DEG1","GAG1","GOG1","HAG1","HOG1",
+  "HOG2","JIG1","JJG1","KDG1","MKG1","NBG1","NKG1","SEG1","SHG1","AA1G","AA2G",
+]);
+function isExcludedStorageLocation(storageLoc) {
+  return EXCLUDED_STORAGE_LOCATIONS.has(String(storageLoc || "").trim().toUpperCase());
 }
 // ─────────────────────────────────────────────────────────────────────────────
 const PLOTLY_LAYOUT = {
@@ -301,11 +319,18 @@ function loadFile(file) {
         const missing = REQUIRED_COLUMNS.filter(c => !colsLower.includes(c.toLowerCase()));
         if (missing.length) { showError(`Missing columns: ${missing.join(", ")}`); return; }
 
-        // [ALL EXCLUSIONS DISABLED] — keep every row from the raw Excel file.
-        // Original chain filtered out NT* codes, non-[1-4] materials, non-medical
-        // groups, project stock descriptions, Special Stock Type "Q", and
-        // excluded storage locations. All stubs in filters.js now return false.
-        let df = trimmed.slice(); // shallow copy, no rows dropped
+        // EXCLUSIONS RE-ENABLED — hard-coded base filters applied before any page
+        // filter or reconciliation. These rows are permanently excluded from rawDf
+        // so they never appear on any page, in any chart, or in any download.
+        //   1. Special Stock Type "Q" (Project Stock) and "W" (Vendor Consignment)
+        //   2. Storage Locations in the EXCLUDED_STORAGE_LOCATIONS set (21 locations)
+        // All other stub filters (material code prefix, non-medical group, project
+        // stock description) remain disabled.
+        let df = trimmed.filter(row => {
+          const sst = String(row["Special Stock Type"] || "").trim().toUpperCase();
+          const loc = String(row["Storage Location"]   || "").trim().toUpperCase();
+          return !isExcludedSpecialStockType(sst) && !isExcludedStorageLocation(loc);
+        });
 
         const numCols = [
           "Unrestricted Stock","Stock in Quality Inspection","Blocked Stock","Stock in Transit",
