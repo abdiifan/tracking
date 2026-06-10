@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EPSS Stock-Multiple— Inventory Management</title>
+  <style>
+    .brand-icon img { height: 44px; width: auto; display: block; }
+    .landing-logo img { height: 90px; width: auto; display: block; margin: 0 auto 0.5rem; }
+  </style>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.26.0/plotly.min.js"></script>
+</head>
+<body>
+
+<!-- ═══════════════ MATERIAL CODE RECONCILIATION SIDEBAR ═══════════════ -->
+<div id="reconcile-overlay" class="overlay" style="display:none"></div>
+<aside id="reconcile-panel" class="reconcile-panel" style="display:none">
+  <div class="rp-header">
+    <div>
+      <div class="rp-title">🔗 UOM Conversion &amp; Reconciliation</div>
+      <div class="rp-sub">Convert source material codes → target codes with unit conversion</div>
+    </div>
+    <button id="reconcile-close" class="icon-btn">✕</button>
+  </div>
+  <div class="rp-body">
+
+    <!-- Upload mapping Excel -->
+    <div class="rp-section-label">UPLOAD MAPPING FILE</div>
+    <div class="rp-upload-hint">Excel columns: <b>Material (source)</b> · <b>Material Description</b> · <b>Unit</b> · <b>Conversion factor</b> · <b>Material (target)</b> · <b>Material Description</b> · <b>Unit</b></div>
+    <label class="upload-btn" style="margin-top:0.5rem;font-size:0.75rem" for="rp-file-input">
+      📂 Upload Mapping Excel (.xlsx)
+      <input type="file" id="rp-file-input" accept=".xlsx,.xls" style="display:none" />
+    </label>
+    <div id="rp-upload-status" style="font-size:0.72rem;margin-top:0.4rem;color:var(--muted)"></div>
+
+    <!-- Manual entry -->
+    <div class="rp-section-label" style="margin-top:1.3rem">ADD CONVERSION MANUALLY</div>
+    <div class="rp-manual-grid">
+      <div class="rp-manual-col">
+        <div class="rp-col-label">SOURCE (in your data)</div>
+        <input id="rp-src-search" type="text" placeholder="Search source code/desc…" class="rp-input" />
+        <div id="rp-src-results" class="rp-results" style="max-height:140px"></div>
+        <div id="rp-src-selected" class="rp-selected-chip" style="display:none"></div>
+      </div>
+      <div class="rp-manual-col">
+        <div class="rp-col-label">TARGET (canonical)</div>
+        <input id="rp-tgt-search" type="text" placeholder="Search target code/desc…" class="rp-input" />
+        <div id="rp-tgt-results" class="rp-results" style="max-height:140px"></div>
+        <div id="rp-tgt-selected" class="rp-selected-chip" style="display:none"></div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.6rem;margin-top:0.7rem;flex-wrap:wrap">
+      <label style="font-size:0.72rem;color:var(--muted);white-space:nowrap">Conversion Factor <span style="color:var(--amber)" title="Source qty × factor = Target qty">ⓘ</span></label>
+      <input id="rp-conv-factor" type="number" min="0.000001" step="any" value="1" style="width:90px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:5px 8px;border-radius:6px;font-size:13px" />
+      <button id="rp-add-manual" class="apply-btn" style="flex:1;min-width:120px">+ Add Conversion</button>
+    </div>
+
+    <!-- Existing conversions -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:1.5rem">
+      <div class="rp-section-label" style="margin:0">ACTIVE CONVERSIONS <span id="rp-group-count" style="color:var(--amber)"></span></div>
+      <button id="rp-clear-all" class="apply-btn secondary" style="font-size:0.7rem;padding:3px 10px">Clear All</button>
+    </div>
+    <div id="rp-groups-list" style="margin-top:0.6rem"></div>
+  </div>
+</aside>
+
+<!-- ═══════════════════════════ SIDEBAR ═══════════════════════════ -->
+<aside id="sidebar">
+  <div class="brand">
+    <span class="brand-icon"><img src="epss-logo.png" alt="EPSS Logo" /></span>
+    <div>
+      <div class="brand-name">Stock-Multiple</div>
+      <div class="brand-sub">INVENTORY MANAGEMENT</div>
+    </div>
+  </div>
+
+  <nav id="nav">
+    <div class="nav-label">NAVIGATION</div>
+    <button class="nav-btn" data-page="home">🏠 Home</button>
+    <button class="nav-btn active" data-page="dashboard">📊 Dashboard</button>
+    <button class="nav-btn" data-page="transit">🚚 Stock in Transit</button>
+    <button class="nav-btn" data-page="expiry">⏰ Expiry Watchlist</button>
+    <button class="nav-btn" data-page="qc">🔬 Quality Inspection</button>
+    <button class="nav-btn" data-page="branch">🏢 Branch Comparison</button>
+    <button class="nav-btn" data-page="flow">📦 Inventory Flow</button>
+    <button class="nav-btn" data-page="preview">📋 Data Preview</button>
+  </nav>
+
+  <div class="sidebar-divider"></div>
+  <div class="upload-label">Data Source</div>
+  <label class="upload-btn" for="fileInput">
+    <span id="uploadBtnText">📂 Upload Inventory Excel</span>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" />
+  </label>
+  <div id="fileStatus"></div>
+
+  <div class="sidebar-divider"></div>
+  <div class="upload-label">Stock in Transit</div>
+  <label class="upload-btn transit-upload-btn" for="transitFileInput">
+    <span id="transitUploadBtnText">📦 Upload Transit Excel</span>
+    <input type="file" id="transitFileInput" accept=".xlsx,.xls" />
+  </label>
+  <div id="transitFileStatus"></div>
+
+  <div class="sidebar-divider"></div>
+  <button class="nav-btn reconcile-nav-btn" id="open-reconcile-btn">🔗 Material Reconciliation</button>
+
+  <!-- ══ GLOBAL MATERIAL SEARCH (Sidebar) ══ -->
+  <div id="global-search-bar" style="display:none">
+    <div class="sidebar-divider"></div>
+    <div class="upload-label">🔍 Material Search</div>
+    <div id="global-search-wrap">
+      <input id="global-search-input" type="text" placeholder="Search any material…" autocomplete="off" />
+      <div id="global-search-tags">
+        <span class="gsb-tag gsb-tag-stock">In Stock</span>
+        <span class="gsb-tag gsb-tag-transit">In Transit</span>
+      </div>
+      <div style="display:flex;gap:0.4rem;margin-top:0.4rem">
+        <button id="global-search-btn">Search</button>
+        <button id="global-search-clear" class="gsb-clear">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebar-footer">Stock-MultipleTrack· ETB Currency</div>
+</aside>
+
+<!-- Global search results panel (outside sidebar, rendered in main area) -->
+<div id="global-search-results-panel" style="display:none;position:fixed;left:230px;top:0;right:0;bottom:0;z-index:150;overflow-y:auto;background:var(--bg);padding:2rem 2.4rem">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+    <div style="font-size:1.1rem;font-weight:700;color:var(--blue)">🔍 Material Search Results</div>
+    <button id="global-search-results-close" style="background:var(--surface2);color:var(--muted);border:1px solid var(--border2);border-radius:7px;padding:0.3rem 0.9rem;font-family:inherit;font-size:0.78rem;cursor:pointer">✕ Close</button>
+  </div>
+  <div id="global-search-results"></div>
+</div>
+
+<!-- ═══════════════════════════ MAIN ═══════════════════════════ -->
+<main id="main">
+
+
+
+  <div id="landingView">
+    <div class="landing-logo"><img src="epss-logo.png" alt="EPSS Logo" /></div>
+    <h1 class="landing-title">Stock-MultipleTrack</h1>
+    <p class="landing-desc">Upload your pharmaceutical inventory Excel file from the sidebar to begin analysis.<br/>All values are displayed in <strong style="color:#58a6ff">Ethiopian Birr (ETB)</strong>.</p>
+    <div class="landing-features">
+      <div class="feature-chip">🚚 Transit Analysis</div>
+      <div class="feature-chip">⏰ Expiry Watchlist</div>
+      <div class="feature-chip">🔬 QC Inspection</div>
+      <div class="feature-chip">🏢 Branch Compare</div>
+      <div class="feature-chip">📦 Inventory Flow</div>
+      <div class="feature-chip">🔗 Code Reconciliation</div>
+    </div>
+  </div>
+
+  <div id="errorBanner" class="alert-danger" style="display:none"></div>
+
+  <!-- ── HOME ── -->
+  <section id="page-home" class="page" style="display:none">
+    <div class="home-hero">
+      <div class="home-hero-logo"><img src="epss-logo.png" alt="EPSS Logo" /></div>
+      <div class="home-hero-text">
+        <div class="home-hero-tag">EPSS · Stock-Multiple-Track</div>
+        <h1 class="home-hero-title">Inventory Management<br/><span class="home-hero-accent">Team</span></h1>
+        <p class="home-hero-desc">Real-time pharmaceutical stock analytics across all plants and material groups. Upload your inventory Excel file to get started.</p>
+      </div>
+    </div>
+
+    <!-- Summary KPIs — populated by JS when data is loaded -->
+    <div id="home-kpis" class="kpi-row" style="display:none"></div>
+
+    <!-- Module cards grid -->
+    <div class="home-modules-label">MODULES</div>
+    <div class="home-modules">
+      <button class="home-module-card blue" data-page="dashboard">
+        <div class="hmc-icon">📊</div>
+        <div class="hmc-title">Dashboard</div>
+        <div class="hmc-desc">Aggregated KPIs, plant value breakdown, material group distribution, and near-expiry risk overview.</div>
+      </button>
+      <button class="home-module-card amber" data-page="transit">
+        <div class="hmc-icon">🚚</div>
+        <div class="hmc-title">Stock in Transit</div>
+        <div class="hmc-desc">Track all inventory currently moving between locations with full batch and valuation detail.</div>
+      </button>
+      <button class="home-module-card red" data-page="expiry">
+        <div class="hmc-icon">⏰</div>
+        <div class="hmc-title">Expiry Watchlist</div>
+        <div class="hmc-desc">Timeline of upcoming expirations by month with drill-down to individual batch level.</div>
+      </button>
+      <button class="home-module-card purple" data-page="qc">
+        <div class="hmc-icon">🔬</div>
+        <div class="hmc-title">Quality Inspection</div>
+        <div class="hmc-desc">Stock held in QC/QA pending release — by plant, batch, and material group.</div>
+      </button>
+      <button class="home-module-card green" data-page="branch">
+        <div class="hmc-icon">🏢</div>
+        <div class="hmc-title">Branch Comparison</div>
+        <div class="hmc-desc">Side-by-side inventory comparison across all branches with material-level drill-down.</div>
+      </button>
+      <button class="home-module-card blue" data-page="flow">
+        <div class="hmc-icon">📦</div>
+        <div class="hmc-title">Inventory Flow</div>
+        <div class="hmc-desc">Reorder alerts, inter-location transfers, and inbound vs. available stock charts.</div>
+      </button>
+      <button class="home-module-card amber" data-page="preview">
+        <div class="hmc-icon">📋</div>
+        <div class="hmc-title">Data Preview</div>
+        <div class="hmc-desc">Explore the full filtered dataset with plant, material group, and code filters.</div>
+      </button>
+    </div>
+
+    <!-- Info strip -->
+    <div class="home-info-strip">
+      <div class="home-info-item">
+        <div class="home-info-icon">🇪🇹</div>
+        <div><div class="home-info-title">ETB Currency</div><div class="home-info-sub">All values in Ethiopian Birr</div></div>
+      </div>
+      <div class="home-info-item">
+        <div class="home-info-icon">🔗</div>
+        <div><div class="home-info-title">Code Reconciliation</div><div class="home-info-sub">UOM conversion between material codes</div></div>
+      </div>
+      <div class="home-info-item">
+        <div class="home-info-icon">🔒</div>
+        <div><div class="home-info-title">Local Processing</div><div class="home-info-sub">All data stays in your browser</div></div>
+      </div>
+      <div class="home-info-item">
+        <div class="home-info-icon">⚡</div>
+        <div><div class="home-info-title">PharmaTrack v2.0</div><div class="home-info-sub">Multi-plant · Multi-batch · Real-time</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── DASHBOARD ── -->
+  <section id="page-dashboard" class="page" style="display:none">
+    <div class="page-header-row">
+      <div><div class="page-title">Dashboard Overview</div><div class="page-subtitle">Aggregated inventory metrics across all plants and material groups</div></div>
+      <div class="page-actions">
+        <button class="dl-btn" id="btn-dl-dash-xlsx">⬇ Excel</button>
+        <button class="dl-btn" id="btn-dl-dash-csv">⬇ CSV</button>
+      </div>
+    </div>
+    <div class="filter-bar">
+      <div class="ms-wrap" id="ms-dash-plant"><button class="ms-btn" type="button">All Plants <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-dash-plant-dd"></div></div>
+      <div class="ms-wrap" id="ms-dash-mg"><button class="ms-btn" type="button">All Material Groups <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-dash-mg-dd"></div></div>
+      <button type="button" class="apply-btn small" id="dash-filter-apply">Apply</button>
+      <button type="button" class="apply-btn secondary small" id="dash-filter-clear">Clear</button>
+    </div>
+    <div class="kpi-row" id="dash-kpis"></div>
+    <div class="chart-row">
+      <div class="chart-box wide"><div class="section-header">Inventory Value &amp; Quantity by Plant</div><div id="chart-plant-val"></div></div>
+      <div class="chart-box narrow"><div class="section-header">Material Group Distribution</div><div id="chart-cat-pie"></div></div>
+    </div>
+    <div class="chart-box full">
+      <div class="section-header" style="display:flex;align-items:center;gap:0.5rem;padding-bottom:0.25rem">
+        <span style="font-size:1.1em">⚠️</span>
+        <span>Near-Expiry Risk by Plant</span>
+        <span style="font-size:0.7rem;font-weight:400;color:#8b949e;margin-left:0.25rem">— Items expiring within 6 months · Value &amp; Quantity at risk</span>
+      </div>
+      <div style="display:flex;gap:1.2rem;margin-bottom:0.6rem;font-size:0.72rem;color:#8b949e">
+        <span><span style="display:inline-block;width:10px;height:10px;background:#f85149;border-radius:2px;margin-right:4px"></span>Highest risk</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:#ffa657;border-radius:2px;margin-right:4px"></span>High risk</span>
+        <span><span style="display:inline-block;width:10px;height:10px;background:#d29922;border-radius:2px;margin-right:4px"></span>Moderate risk</span>
+        <span style="margin-left:auto;color:#f85149;font-weight:500">Red labels = units at risk</span>
+      </div>
+      <div id="chart-mg-bar"></div>
+    </div>
+  </section>
+
+  <!-- ── TRANSIT ── -->
+  <section id="page-transit" class="page" style="display:none">
+    <div class="page-header-row">
+      <div><div class="page-title">Stock in Transit Analysis</div><div class="page-subtitle">Tracking of pharmaceutical goods moving through the supply chain</div></div>
+      <div class="page-actions">
+        <button class="dl-btn" id="btn-dl-transit-xlsx">⬇ Excel</button>
+        <button class="dl-btn" id="btn-dl-transit">⬇ CSV</button>
+      </div>
+    </div>
+    <div class="filter-bar">
+      <div class="ms-wrap" id="ms-transit-plant"><button class="ms-btn" type="button">All Plants <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-transit-plant-dd"></div></div>
+      <div class="ms-wrap" id="ms-transit-mg"><button class="ms-btn" type="button">All Material Groups <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-transit-mg-dd"></div></div>
+      <button type="button" class="apply-btn small" id="transit-filter-apply">Apply</button>
+      <button type="button" class="apply-btn secondary small" id="transit-filter-clear">Clear</button>
+    </div>
+
+    <!-- Material Search for Transit -->
+    <div class="chart-box full" style="margin-bottom:1rem">
+      <div class="section-header" style="margin-bottom:0.4rem">🔍 Material Transit Lookup</div>
+      <div style="color:var(--muted);font-size:0.78rem;margin-bottom:0.75rem">Search any material to see all its stock in transit across plants and batches</div>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.75rem">
+        <input id="transit-search-input" type="text" placeholder="Type material code or name…"
+          style="flex:1;min-width:220px;max-width:400px;padding:0.45rem 0.75rem;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:0.82rem;outline:none" />
+        <button class="apply-btn small" id="transit-search-btn">Search</button>
+        <button class="apply-btn secondary small" id="transit-search-clear">Clear</button>
+      </div>
+      <div id="transit-search-results"></div>
+    </div>
+    <div class="kpi-row" id="transit-kpis"></div>
+    <div class="chart-box full"><div class="section-header">Transit Quantity &amp; Value by Plant</div><div id="chart-transit-plant"></div></div>
+    <div class="section-header" style="margin-top:1.5rem">Detailed Transit Items</div>
+    <div id="transit-table-wrap"></div>
+
+    <!-- ── STOCK-IN-TRANSIT DETAIL (separate upload) ── -->
+    <div class="section-header" style="margin-top:2rem">📦 Stock-in-Transit Detail File</div>
+
+    <div id="stock-transit-no-file" class="alert-info" style="margin-bottom:1rem">
+      Upload a Transit Excel file using the <b>📦 Upload Transit Excel</b> button in the sidebar to view detailed purchasing document and supplying plant breakdown.
+    </div>
+
+    <div id="stock-transit-content" style="display:none">
+      <!-- Filters -->
+      <div class="filter-bar" style="margin-bottom:1rem">
+        <select id="st-filter-pur-doc" style="background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:200px">
+          <option value="">All Purchasing Documents</option>
+        </select>
+        <select id="st-filter-sup-plant" style="background:var(--surface2);border:1px solid var(--border2);color:var(--text);padding:6px 10px;border-radius:6px;font-size:13px;min-width:180px">
+          <option value="">All Supplying Plants</option>
+        </select>
+        <button class="apply-btn small" id="st-filter-apply">Apply</button>
+        <button class="apply-btn secondary small" id="st-filter-clear">Clear</button>
+        <button class="dl-btn" id="btn-dl-st-xlsx">⬇ Excel</button>
+        <button class="dl-btn" id="btn-dl-st-csv">⬇ CSV</button>
+      </div>
+      <div class="kpi-row" id="st-kpis"></div>
+      <div id="st-table-wrap"></div>
+    </div>
+  </section>
+
+  <!-- ── EXPIRY ── -->
+  <section id="page-expiry" class="page" style="display:none">
+    <div class="page-header-row">
+      <div><div class="page-title">Expiry Watchlist</div><div class="page-subtitle">Monitor shelf life expiration dates to prevent stock wastage</div></div>
+    </div>
+    <div class="filter-bar">
+      <div class="radio-group" id="expiry-window-group" style="margin:0">
+        <label><input type="radio" name="expWin" value="3" /> Next 3 Months</label>
+        <label><input type="radio" name="expWin" value="6" checked /> Next 6 Months</label>
+        <label><input type="radio" name="expWin" value="12" /> Next 12 Months</label>
+      </div>
+      <div class="ms-wrap" id="ms-expiry-plant"><button class="ms-btn" type="button">All Plants <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-expiry-plant-dd"></div></div>
+      <div class="ms-wrap" id="ms-expiry-mg"><button class="ms-btn" type="button">All Material Groups <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-expiry-mg-dd"></div></div>
+      <button type="button" class="apply-btn small" id="expiry-filter-apply">Apply</button>
+      <button type="button" class="apply-btn secondary small" id="expiry-filter-clear">Clear</button>
+    </div>
+
+    <!-- ── MATERIAL EXPIRY LOOKUP ── -->
+    <div style="margin-bottom:1.5rem">
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.75rem">
+        <span style="font-size:0.82rem;color:var(--muted);white-space:nowrap">🔍 Material Lookup:</span>
+        <input id="expiry-search-input" type="text" placeholder="Type material code or name…"
+          style="flex:1;min-width:220px;max-width:400px;padding:0.45rem 0.75rem;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:0.82rem;outline:none" />
+        <button class="apply-btn small" id="expiry-search-btn">Search</button>
+        <button class="apply-btn secondary small" id="expiry-search-clear">Clear</button>
+      </div>
+      <div id="expiry-search-results"></div>
+    </div>
+
+    <div class="kpi-row" id="expiry-kpis"></div>
+    <div class="chart-box full">
+      <div class="section-header" style="display:flex;align-items:center;gap:0.5rem">
+        <span>Expiry Timeline — Items &amp; Value at Risk by Month</span>
+        <span style="font-size:0.7rem;font-weight:400;color:#8b949e;margin-left:0.25rem">— Click a bar to drill into that month's items</span>
+      </div>
+      <div id="chart-expiry-timeline"></div>
+      <div id="expiry-drilldown" style="display:none;margin-top:1rem;border-top:1px solid var(--border2);padding-top:1rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;flex-wrap:wrap;gap:0.5rem">
+          <div>
+            <span id="expiry-drill-title" style="font-weight:600;color:#e6edf3;font-size:0.95rem"></span>
+            <span id="expiry-drill-meta" style="font-size:0.78rem;color:#8b949e;margin-left:0.75rem"></span>
+          </div>
+          <div style="display:flex;gap:0.5rem;align-items:center">
+            <button id="expiry-drill-dl-csv" class="dl-btn" style="font-size:0.72rem;padding:4px 10px">⬇ CSV</button>
+            <button id="expiry-drill-dl-xlsx" class="dl-btn" style="font-size:0.72rem;padding:4px 10px">⬇ Excel</button>
+            <button id="expiry-drill-close" class="apply-btn secondary" style="font-size:0.72rem;padding:4px 12px">✕ Close</button>
+          </div>
+        </div>
+        <div id="expiry-drill-table"></div>
+      </div>
+    </div>
+    <div id="expiry-table-wrap"></div>
+    <div id="expired-section" style="margin-top:1.5rem">
+      <div class="section-header" id="expired-header"></div>
+      <div id="expired-table-wrap"></div>
+      <button class="dl-btn" id="btn-dl-expired">⬇ Download Expired Items (CSV)</button>
+    </div>
+  </section>
+
+  <!-- ── QC ── -->
+  <section id="page-qc" class="page" style="display:none">
+    <div class="page-header-row">
+      <div><div class="page-title">Quality Inspection Stock</div><div class="page-subtitle">Inventory currently held in quality control and pending release</div></div>
+      <div class="page-actions">
+        <button class="dl-btn" id="btn-dl-qc-xlsx">⬇ Excel</button>
+        <button class="dl-btn" id="btn-dl-qc">⬇ CSV</button>
+      </div>
+    </div>
+    <div class="filter-bar">
+      <div class="ms-wrap" id="ms-qc-plant"><button class="ms-btn" type="button">All Plants <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-qc-plant-dd"></div></div>
+      <div class="ms-wrap" id="ms-qc-mg"><button class="ms-btn" type="button">All Material Groups <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-qc-mg-dd"></div></div>
+      <button type="button" class="apply-btn small" id="qc-filter-apply">Apply</button>
+      <button type="button" class="apply-btn secondary small" id="qc-filter-clear">Clear</button>
+    </div>
+
+    <!-- Material Search (mirrors Expiry Watchlist lookup) -->
+    <div class="chart-box full" style="margin-bottom:1rem">
+      <div class="section-header" style="margin-bottom:0.4rem">🔍 Material QC Lookup</div>
+      <div style="color:var(--muted);font-size:0.78rem;margin-bottom:0.75rem">Search any material to see all its QC stock across plants and batches</div>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.75rem">
+        <input id="qc-search-input" type="text" placeholder="Type material code or name…"
+          style="flex:1;min-width:220px;max-width:400px;padding:0.45rem 0.75rem;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:0.82rem;outline:none" />
+        <button class="apply-btn small" id="qc-search-btn">Search</button>
+        <button class="apply-btn secondary small" id="qc-search-clear">Clear</button>
+      </div>
+      <div id="qc-search-results"></div>
+    </div>
+
+    <div class="kpi-row" id="qc-kpis"></div>
+    <div class="chart-box full"><div class="section-header">QC Quantity &amp; Value by Plant</div><div id="chart-qc-plant"></div></div>
+    <div class="section-header" style="margin-top:1.5rem">Detailed QC Items</div>
+    <div id="qc-table-wrap"></div>
+  </section>
+
+  <!-- ── BRANCH ── -->
+  <section id="page-branch" class="page" style="display:none">
+    <div class="page-header-row">
+      <div><div class="page-title">Branch Comparison</div><div class="page-subtitle">Compare inventory across branches — total value or individual material</div></div>
+      <div class="page-actions">
+        <button class="dl-btn" id="btn-dl-branch-xlsx">⬇ Excel</button>
+        <button class="dl-btn" id="btn-dl-branch-csv">⬇ CSV</button>
+      </div>
+    </div>
+    <div id="branch-central-info" class="alert-info" style="margin-bottom:1rem;display:none"></div>
+    <div class="filter-bar">
+      <div class="ms-wrap" id="ms-branch-mg"><button class="ms-btn" type="button">All Material Groups <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-branch-mg-dd"></div></div>
+      <button type="button" class="apply-btn small" id="branch-filter-apply">Apply</button>
+      <button type="button" class="apply-btn secondary small" id="branch-filter-clear">Clear</button>
+    </div>
+    <div class="filter-row" id="branch-select-row">
+      <label class="filter-label">Select branches to compare (hold Ctrl/Cmd for multi-select):</label>
+      <select id="branch-select" multiple size="4"></select>
+    </div>
+    <div id="branch-tabs-wrap" style="margin-top:1.2rem"></div>
+  </section>
+
+  <!-- ── FLOW ── -->
+  <section id="page-flow" class="page" style="display:none">
+    <div class="page-header-row">
+      <div><div class="page-title">Inventory Flow</div><div class="page-subtitle">Track inbound/outbound movements, current stock levels, reorder alerts, and inter-location transfers</div></div>
+      <div class="page-actions">
+        <button class="dl-btn" id="btn-dl-flow-xlsx">⬇ Excel</button>
+        <button class="dl-btn" id="btn-dl-flow-csv">⬇ CSV</button>
+      </div>
+    </div>
+    <div class="filter-bar">
+      <div class="ms-wrap" id="ms-flow-plant"><button class="ms-btn" type="button">All Plants <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-flow-plant-dd"></div></div>
+      <div class="ms-wrap" id="ms-flow-mg"><button class="ms-btn" type="button">All Material Groups <span class="ms-arrow">▾</span></button><div class="ms-dropdown" id="ms-flow-mg-dd"></div></div>
+      <button type="button" class="apply-btn small" id="flow-filter-apply">Apply</button>
+      <button type="button" class="apply-btn secondary small" id="flow-filter-clear">Clear</button>
+    </div>
+
+    <!-- Material Search for Flow -->
+    <div class="chart-box full" style="margin-bottom:1rem">
+      <div class="section-header" style="margin-bottom:0.4rem">🔍 Material Inventory Flow Lookup</div>
+      <div style="color:var(--muted);font-size:0.78rem;margin-bottom:0.75rem">Search any material to see all its QC stock across plants and batches</div>
+      <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:0.75rem">
+        <input id="flow-search-input" type="text" placeholder="Type material code or name…"
+          style="flex:1;min-width:220px;max-width:400px;padding:0.45rem 0.75rem;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:0.82rem;outline:none" />
+        <button class="apply-btn small" id="flow-search-btn">Search</button>
+        <button class="apply-btn secondary small" id="flow-search-clear">Clear</button>
+      </div>
+      <div id="flow-search-results"></div>
+    </div>
+    <div class="kpi-row" id="flow-kpis"></div>
+    <div class="section-header">🔴 Reorder Alerts — Zero or Critically Low Unrestricted Stock</div>
+    <div class="alert-warning" style="margin-bottom:0.8rem;font-size:0.78rem">Items with zero unrestricted stock but existing in transit or QC — immediate follow-up required.</div>
+    <div id="reorder-table-wrap"></div>
+    <div class="section-header" style="margin-top:1.5rem">📊 Stock Breakdown by Plant — Available vs In Transit vs In QC (Units)</div>
+    <div class="chart-box full"><div id="chart-stock-levels"></div></div>
+    <div class="section-header" style="margin-top:1.5rem">🔄 Inter-Location Transfers (Transit in Progress)</div>
+    <div id="transfer-table-wrap"></div>
+    <div class="section-header" style="margin-top:1.5rem">📥 Inbound (Transit) vs Available Stock by Plant</div>
+    <div class="chart-box full"><div id="chart-inbound-outbound"></div></div>
+  </section>
+
+  <!-- ── PREVIEW ── -->
+  <section id="page-preview" class="page" style="display:none">
+    <div class="page-header-row">
+      <div><div class="page-title">Data Preview</div><div class="page-subtitle">Explore the filtered dataset — Project Stock (Q) and Non-Trade materials excluded</div></div>
+      <div class="page-actions">
+        <button class="dl-btn" id="btn-dl-preview-xlsx">⬇ Excel</button>
+        <button class="dl-btn" id="btn-dl-preview">⬇ CSV</button>
+      </div>
+    </div>
+    <div class="kpi-row" id="preview-kpis"></div>
+    <div class="filter-panel">
+      <div class="filter-group">
+        <label>Plant</label>
+        <select id="filter-plant" multiple size="4"></select>
+      </div>
+      <div class="filter-group">
+        <label>Material Group Name</label>
+        <select id="filter-mgname" multiple size="4"></select>
+      </div>
+      <div class="filter-group">
+        <label>Material Group Code</label>
+        <select id="filter-mg" multiple size="4"></select>
+      </div>
+      <button class="apply-btn" id="btn-apply-filter">Apply Filters</button>
+      <button class="apply-btn secondary" id="btn-clear-filter">Clear</button>
+    </div>
+    <div id="preview-count" class="alert-info" style="margin-bottom:1rem"></div>
+    <div id="preview-table-wrap"></div>
+  </section>
+
+</main>
+
+<script src="filters.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
