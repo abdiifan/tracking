@@ -1,25 +1,3 @@
-// =============================================================================
-// PharmaTrack v2 — Pharmaceutical Inventory Management System
-// =============================================================================
-// Fixes applied vs v8:
-//  BUG-1  Preview download now exports full filtered dataset (not 500-row slice)
-//  BUG-2  Chain/circular reconciliation rules detected and blocked on save
-//  BUG-3  pageFilters reset on new file upload so stale plant/MG never persists
-//  BUG-4  "Already Expired" KPI now counts only stock-qty > 0 rows (matches table)
-//  BUG-5  Target materials blocked from being selected as a new source
-//  BUG-6  QC page no longer drops items with QC qty > 0 but zero ETB value
-//  BUG-7  rpSetSelected chip close button uses addEventListener, not inline onclick
-//  BUG-8  String expiry dates parsed as LOCAL midnight not UTC (timezone fix)
-//  BUG-9  CSV tab-character cells now quoted correctly
-//  BUG-10 groupBy empty-string bucket renamed to "(Blank)" for chart clarity
-//  PERF-1 applyReconciliationToData result memoised; invalidated on file/rule change
-//  PERF-2 File size warning before parse (>25 MB)
-//  ROBUST localStorage schema validated on load; corrupt entries discarded
-//  ROBUST Column header matching is now case-insensitive
-//  ROBUST Total Qty removed from QTY_COLS scaling (was scaled then overwritten)
-//  ROBUST Conversion factor stored with 9dp rounding to suppress float drift
-// =============================================================================
-
 // ── CONSTANTS ──────────────────────────────────────────────────────────────
 const REQUIRED_COLUMNS = [
   "Material","Material Description","Plant","Plant Name",
@@ -1396,15 +1374,19 @@ function renderBranch() {
   // across all plants before the branch-level breakdown is built.
   const df = aggregateByMaterial(baseDf);
 
-  const plants = [...new Set(df.map(r => String(r["Plant"]).toUpperCase()))];
+  // BUG-FIX: detect central branch from baseDf (pre-aggregation), not df.
+  // aggregateByMaterial() collapses multi-plant rows into one and copies the
+  // first row's Plant/Plant Name as the base, so df.find("HO01") can miss HO01
+  // entirely if another plant's row happened to be first for that material.
+  const plantsRaw = [...new Set(baseDf.map(r => String(r["Plant"]).toUpperCase()))];
   let centralCode, centralName;
-  if (plants.includes("HO01")) {
+  if (plantsRaw.includes("HO01")) {
     centralCode = "HO01";
-    centralName = df.find(r => String(r["Plant"]).toUpperCase() === "HO01")?.["Plant Name"] || "HO01";
+    centralName = baseDf.find(r => String(r["Plant"]).toUpperCase() === "HO01")?.["Plant Name"] || "HO01";
     document.getElementById("branch-central-info").style.display = "none";
   } else {
     const totals = {};
-    df.forEach(r => { const p = r["Plant Name"]; totals[p] = (totals[p] || 0) + r["Total Value"]; });
+    baseDf.forEach(r => { const p = r["Plant Name"]; totals[p] = (totals[p] || 0) + r["Total Value"]; });
     centralName = Object.entries(totals).sort((a,b) => b[1]-a[1])[0]?.[0] || "";
     document.getElementById("branch-central-info").style.display = "block";
     document.getElementById("branch-central-info").innerHTML = `ℹ️ HO01 not found — using <b>${escHtml(centralName)}</b> as central branch (highest inventory value).`;
